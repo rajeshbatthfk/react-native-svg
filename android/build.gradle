@@ -1,13 +1,19 @@
+import groovy.json.JsonSlurper
+
 buildscript {
     // The Android Gradle plugin is only required when opening the android folder stand-alone.
     // This avoids unnecessary downloads and potential conflicts when the library is included as a
     // module dependency in an application project.
     if (project == rootProject) {
         repositories {
+            maven { url ARTIFACTORY_REPO_URL + RELEASE_REPO_KEY }
+            maven { url ARTIFACTORY_REPO_URL + RELEASES_REPO_KEY }
+            maven { url ARTIFACTORY_REPO_URL + SNAPSHOT_REPO_KEY }
+            maven { url ARTIFACTORY_REPO_URL + SNAPSHOTS_REPO_KEY }
             google()
             jcenter()
         }
-        
+
         dependencies {
             classpath("com.android.tools.build:gradle:3.6.1")
         }
@@ -27,6 +33,8 @@ android {
         minSdkVersion safeExtGet('minSdkVersion', 16)
         //noinspection OldTargetApi
         targetSdkVersion safeExtGet('targetSdkVersion', 28)
+        versionCode 1
+        versionName getVersionFromNpm()
     }
     lintOptions {
         abortOnError false
@@ -46,4 +54,70 @@ repositories {
 dependencies {
     //noinspection GradleDynamicVersion
     implementation "com.facebook.react:react-native:+"
+}
+
+
+apply plugin: 'maven-publish'
+
+afterEvaluate {
+    publishing {
+        repositories {
+            maven {
+                url 'http://artifactory.fkinternal.com/artifactory/v1.0/artifacts/' + "libs-${project.version.endsWith('-SNAPSHOT') ? 'snapshots' : 'release'}-local"
+            }
+        }
+        publications {
+            maven(MavenPublication) {
+                groupId 'com.github.flipkart'
+                artifactId 'react-native-svg'
+                version getVersionFromNpm() // in-sync with ../package.json
+// Or use same version as in android branch
+// version = android.defaultConfig.versionName
+
+                artifact bundleReleaseAar
+
+                pom.withXml {
+                    def dependenciesNode = asNode().appendNode('dependencies')
+
+// List all compile dependencies and write to POM
+                    configurations.implementation.getAllDependencies().each { Dependency dep ->
+                        if (dep.group == null || dep.version == null || dep.name == null || dep.name == "unspecified")
+                            return // ignore invalid dependencies
+
+                        def dependencyNode = dependenciesNode.appendNode('dependency')
+                        dependencyNode.appendNode('groupId', dep.group)
+                        dependencyNode.appendNode('artifactId', dep.name)
+                        dependencyNode.appendNode('version', dep.version)
+
+                        if (!dep.transitive) {
+// If this dependency is transitive, we should force exclude all its dependencies them from the POM
+                            def exclusionNode = dependencyNode.appendNode('exclusions').appendNode('exclusion')
+                            exclusionNode.appendNode('groupId', '*')
+                            exclusionNode.appendNode('artifactId', '*')
+                        } else if (!dep.properties.excludeRules.empty) {
+// Otherwise add specified exclude rules
+                            def exclusionsNode = dependencyNode.appendNode('exclusions')
+                            dep.properties.excludeRules.each { ExcludeRule rule ->
+                                def exclusionNode = exclusionsNode.appendNode('exclusion')
+                                exclusionNode.appendNode('groupId', rule.group ?: '*')
+                                exclusionNode.appendNode('artifactId', rule.module ?: '*')
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+// Create an easy to use function
+def getVersionFromNpm() {
+  //  Read and parse package.json file from project root
+  def inputFile = new File("$rootDir/../package.json")
+  def packageJson = new JsonSlurper().parseText(inputFile.text)
+
+  // Return the version, you can get any value this way
+  return packageJson["version"]
 }
